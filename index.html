@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>11XXXXX - FinalTerm</title>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    text-align: center;
+    background: #f5deb3;
+}
+canvas {
+    background: #deb887;
+    margin-top: 20px;
+    border: 2px solid #333;
+}
+button, select {
+    margin: 10px;
+    padding: 8px 16px;
+    font-size: 16px;
+}
+#info {
+    font-size: 18px;
+    margin-top: 10px;
+}
+</style>
+</head>
+
+<body>
+<h2>九路圍棋（User 黑棋 vs Computer 白棋）</h2>
+
+<div id="info">輪到：黑棋</div>
+
+<button onclick="pass()">Pass</button>
+
+<select id="difficulty">
+    <option value="normal">普通 AI</option>
+    <option value="hard">困難 AI</option>
+</select>
+
+<br>
+<canvas id="board" width="450" height="450"></canvas>
+
+<script>
+/* ===== 基本設定 ===== */
+const SIZE = 9;
+const GRID = 50;
+const OFFSET = 25;
+
+const EMPTY = 0, BLACK = 1, WHITE = 2;
+
+let board = Array.from({ length: SIZE }, () => Array(SIZE).fill(EMPTY));
+let turn = BLACK;
+let passCount = 0;
+let lastBoard = "";
+let difficulty = "normal";
+
+const canvas = document.getElementById("board");
+const ctx = canvas.getContext("2d");
+
+/* ===== UI ===== */
+document.getElementById("difficulty").addEventListener("change", e => {
+    difficulty = e.target.value;
+});
+
+/* ===== 畫棋盤 ===== */
+function drawBoard() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    for (let i = 0; i < SIZE; i++) {
+        ctx.beginPath();
+        ctx.moveTo(OFFSET, OFFSET + i * GRID);
+        ctx.lineTo(OFFSET + GRID * (SIZE - 1), OFFSET + i * GRID);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(OFFSET + i * GRID, OFFSET);
+        ctx.lineTo(OFFSET + i * GRID, OFFSET + GRID * (SIZE - 1));
+        ctx.stroke();
+    }
+
+    for (let y = 0; y < SIZE; y++) {
+        for (let x = 0; x < SIZE; x++) {
+            if (board[y][x] !== EMPTY) {
+                ctx.beginPath();
+                ctx.arc(
+                    OFFSET + x * GRID,
+                    OFFSET + y * GRID,
+                    20, 0, Math.PI * 2
+                );
+                ctx.fillStyle = board[y][x] === BLACK ? "black" : "white";
+                ctx.fill();
+                ctx.stroke();
+            }
+        }
+    }
+}
+drawBoard();
+
+/* ===== 工具 ===== */
+function neighbors(x, y) {
+    return [[x+1,y],[x-1,y],[x,y+1],[x,y-1]]
+        .filter(([nx, ny]) => nx >= 0 && ny >= 0 && nx < SIZE && ny < SIZE);
+}
+
+function hasLiberty(x, y, color, visited = {}) {
+    const key = `${x},${y}`;
+    if (visited[key]) return false;
+    visited[key] = true;
+
+    for (let [nx, ny] of neighbors(x, y)) {
+        if (board[ny][nx] === EMPTY) return true;
+        if (board[ny][nx] === color &&
+            hasLiberty(nx, ny, color, visited)) return true;
+    }
+    return false;
+}
+
+function removeGroup(x, y, color) {
+    board[y][x] = EMPTY;
+    for (let [nx, ny] of neighbors(x, y)) {
+        if (board[ny][nx] === color) removeGroup(nx, ny, color);
+    }
+}
+
+function removeCaptured(color) {
+    for (let y = 0; y < SIZE; y++) {
+        for (let x = 0; x < SIZE; x++) {
+            if (board[y][x] === color && !hasLiberty(x, y, color)) {
+                removeGroup(x, y, color);
+            }
+        }
+    }
+}
+
+/* ===== 落子（含禁著 / Ko） ===== */
+function placeStone(x, y, color) {
+    const snapshot = JSON.stringify(board);
+    board[y][x] = color;
+
+    removeCaptured(3 - color);
+
+    if (!hasLiberty(x, y, color)) {
+        board = JSON.parse(snapshot);
+        return false;
+    }
+
+    if (JSON.stringify(board) === lastBoard) {
+        board = JSON.parse(snapshot);
+        return false;
+    }
+
+    lastBoard = snapshot;
+    drawBoard();
+    return true;
+}
+
+/* ===== 是否存在合法落子 ===== */
+function hasAnyLegalMove(color) {
+    for (let y = 0; y < SIZE; y++) {
+        for (let x = 0; x < SIZE; x++) {
+            if (board[y][x] !== EMPTY) continue;
+            const backup = JSON.stringify(board);
+            if (placeStone(x, y, color)) {
+                board = JSON.parse(backup);
+                drawBoard();
+                return true;
+            }
+            board = JSON.parse(backup);
+        }
+    }
+    return false;
+}
+
+/* ===== 無棋可下自動判斷 ===== */
+function autoCheckNoMove() {
+    if (!hasAnyLegalMove(turn)) {
+        passCount++;
+        if (passCount >= 2) {
+            endGame();
+            return;
+        }
+        turn = 3 - turn;
+        updateInfo();
+        if (turn === WHITE) setTimeout(computerMove, 400);
+    } else {
+        passCount = 0;
+    }
+}
+
+/* ===== 玩家下棋 ===== */
+canvas.addEventListener("click", e => {
+    if (turn !== BLACK) return;
+
+    const x = Math.round((e.offsetX - OFFSET) / GRID);
+    const y = Math.round((e.offsetY - OFFSET) / GRID);
+
+    if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return;
+    if (board[y][x] !== EMPTY) return;
+
+    if (!placeStone(x, y, BLACK)) return;
+
+    turn = WHITE;
+    updateInfo();
+    autoCheckNoMove();
+    setTimeout(computerMove, 400);
+});
+
+/* ===== AI 控制 ===== */
+function computerMove() {
+    if (difficulty === "hard") {
+        computerMoveHard();
+        return;
+    }
+
+    let bestScore = -Infinity;
+    let bestMove = null;
+
+    for (let y = 0; y < SIZE; y++) {
+        for (let x = 0; x < SIZE; x++) {
+            if (board[y][x] !== EMPTY) continue;
+            let score = evaluateMove(x, y, WHITE);
+            if (score > bestScore) {
+                bestScore = score;
+                bestMove = { x, y };
+            }
+        }
+    }
+
+    if (bestMove) {
+        placeStone(bestMove.x, bestMove.y, WHITE);
+        turn = BLACK;
+        updateInfo();
+        autoCheckNoMove();
+    } else {
+        pass();
+    }
+}
+
+/* ===== 困難 AI ===== */
+function computerMoveHard() {
+    let bestScore = -Infinity;
+    let bestMove = null;
+
+    for (let y = 0; y < SIZE; y++) {
+        for (let x = 0; x < SIZE; x++) {
+            if (board[y][x] !== EMPTY) continue;
+            let score = minimaxOneStep(x, y);
+            if (score > bestScore) {
+                bestScore = score;
+                bestMove = { x, y };
+            }
+        }
+    }
+
+    if (bestMove) {
+        placeStone(bestMove.x, bestMove.y, WHITE);
+        turn = BLACK;
+        updateInfo();
+        autoCheckNoMove();
+    } else {
+        pass();
+    }
+}
+
+function minimaxOneStep(x, y) {
+    const backup = JSON.stringify(board);
+
+    if (!placeStone(x, y, WHITE)) {
+        board = JSON.parse(backup);
+        return -1000;
+    }
+
+    let worstReply = Infinity;
+
+    for (let by = 0; by < SIZE; by++) {
+        for (let bx = 0; bx < SIZE; bx++) {
+            if (board[by][bx] !== EMPTY) continue;
+            let replyScore = evaluateMove(bx, by, BLACK);
+            worstReply = Math.min(worstReply, replyScore);
+        }
+    }
+
+    let myScore = evaluateMove(x, y, WHITE);
+    let finalScore = myScore - worstReply * 0.8;
+
+    board = JSON.parse(backup);
+    drawBoard();
+    return finalScore;
+}
+
+/* ===== 評分 ===== */
+function evaluateMove(x, y, color) {
+    const backup = JSON.stringify(board);
+    board[y][x] = color;
+
+    if (!hasLiberty(x, y, color)) {
+        board = JSON.parse(backup);
+        return -1000;
+    }
+
+    let score = 0;
+    score += countCaptured(3 - color) * 50;
+    score += countLiberty(x, y, color) * 10;
+
+    for (let [nx, ny] of neighbors(x, y)) {
+        if (board[ny][nx] === color) score += 8;
+    }
+
+    let center = Math.abs(4 - x) + Math.abs(4 - y);
+    score += (8 - center) * 2;
+
+    board = JSON.parse(backup);
+    return score;
+}
+
+function countCaptured(color) {
+    let count = 0;
+    let visited = Array.from({ length: SIZE }, () => Array(SIZE).fill(false));
+
+    for (let y = 0; y < SIZE; y++) {
+        for (let x = 0; x < SIZE; x++) {
+            if (board[y][x] === color && !visited[y][x]) {
+                let stack = [[x, y]];
+                let air = false;
+
+                while (stack.length) {
+                    let [cx, cy] = stack.pop();
+                    if (visited[cy][cx]) continue;
+                    visited[cy][cx] = true;
+
+                    for (let [nx, ny] of neighbors(cx, cy)) {
+                        if (board[ny][nx] === EMPTY) air = true;
+                        if (board[ny][nx] === color && !visited[ny][nx])
+                            stack.push([nx, ny]);
+                    }
+                }
+                if (!air) count++;
+            }
+        }
+    }
+    return count;
+}
+
+function countLiberty(x, y, color, visited = {}) {
+    let key = `${x},${y}`;
+    if (visited[key]) return 0;
+    visited[key] = true;
+
+    let liberty = 0;
+    for (let [nx, ny] of neighbors(x, y)) {
+        if (board[ny][nx] === EMPTY) liberty++;
+        else if (board[ny][nx] === color)
+            liberty += countLiberty(nx, ny, color, visited);
+    }
+    return liberty;
+}
+
+/* ===== Pass / 終局 ===== */
+function pass() {
+    passCount++;
+    if (passCount >= 2) {
+        endGame();
+        return;
+    }
+    turn = 3 - turn;
+    updateInfo();
+    autoCheckNoMove();
+    if (turn === WHITE) setTimeout(computerMove, 400);
+}
+
+function updateInfo() {
+    document.getElementById("info").innerText =
+        "輪到：" + (turn === BLACK ? "黑棋" : "白棋");
+}
+
+/* ===== 終局決算 ===== */
+function endGame() {
+    let black = 0, white = 0;
+    let visited = Array.from({ length: SIZE }, () => Array(SIZE).fill(false));
+
+    function flood(x, y) {
+        let stack = [[x, y]];
+        let owner = new Set();
+        let area = 0;
+
+        while (stack.length) {
+            let [cx, cy] = stack.pop();
+            if (visited[cy][cx]) continue;
+            visited[cy][cx] = true;
+            area++;
+
+            for (let [nx, ny] of neighbors(cx, cy)) {
+                if (board[ny][nx] === EMPTY && !visited[ny][nx])
+                    stack.push([nx, ny]);
+                if (board[ny][nx] === BLACK) owner.add(BLACK);
+                if (board[ny][nx] === WHITE) owner.add(WHITE);
+            }
+        }
+
+        if (owner.size === 1) {
+            if (owner.has(BLACK)) black += area;
+            if (owner.has(WHITE)) white += area;
+        }
+    }
+
+    for (let y = 0; y < SIZE; y++) {
+        for (let x = 0; x < SIZE; x++) {
+            if (board[y][x] === BLACK) black++;
+            if (board[y][x] === WHITE) white++;
+            if (board[y][x] === EMPTY && !visited[y][x]) flood(x, y);
+        }
+    }
+
+    alert(
+        `終局結果\n黑棋：${black}\n白棋：${white}\n` +
+        (black > white ? "黑棋勝利" :
+         white > black ? "白棋勝利" : "平手")
+    );
+}
+</script>
+</body>
+</html>
+
+
+
+
